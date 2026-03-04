@@ -1,8 +1,3 @@
-"""
-Minecraft Alt Account Checker
-Searches for Minecraft accounts/usernames on the PC
-"""
-
 import os
 import json
 import re
@@ -12,6 +7,10 @@ import socket
 import requests
 from pathlib import Path
 from datetime import datetime
+import sys
+import time
+import threading
+import shutil
 
 class MinecraftAltChecker:
     def __init__(self):
@@ -19,21 +18,18 @@ class MinecraftAltChecker:
         self.appdata = os.getenv('APPDATA')
         self.localappdata = os.getenv('LOCALAPPDATA')
         self.userprofile = os.getenv('USERPROFILE')
+        self.silent = True
+        self.pbar = None
         
-        # Blacklist: Known false positives (not real Minecraft accounts)
         self.blacklist = {
-            # Technical terms
             'init', 'oled', 'home', 'amd64', 'search_results', 'loader_manifest',
             'game_versions', 'loaders', 'true', 'false', 'null', 'none', 'default',
             'config', 'mods', 'saves', 'logs', 'resourcepacks', 'shaderpacks',
             'versions', 'assets', 'libraries', 'runtime', 'bin', 'natives',
-            # Mod Loader / Modding Platforms
             'fabric', 'quilt', 'neo', 'forge', 'neoforge', 'liteloader', 'modloader',
             'optifine', 'iris', 'canvas', 'sodium', 'lithium', 'phosphor',
-            # Server Software
             'bukkit', 'bungeecord', 'paper', 'purpur', 'spigot', 'velocity',
             'waterfall', 'folia', 'geyser', 'sponge',
-            # Other
             'babric', 'ornithe', 'nilloader', 'datapack', 'minecraft', 'java',
             'client', 'server', 'vanilla', 'snapshot', 'release', 'beta', 'alpha',
             'main', 'test', 'debug', 'dev', 'prod', 'local', 'global', 'user',
@@ -42,51 +38,37 @@ class MinecraftAltChecker:
         }
         
     def log(self, message, color="white"):
-        """Colored console output"""
+        if self.silent:
+            return
         colors = {
-            "red": "\033[91m",
-            "green": "\033[92m",
-            "yellow": "\033[93m",
-            "blue": "\033[94m",
-            "magenta": "\033[95m",
-            "cyan": "\033[96m",
-            "white": "\033[97m",
-            "reset": "\033[0m"
+            "red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m",
+            "blue": "\033[94m", "magenta": "\033[95m", "cyan": "\033[96m",
+            "white": "\033[97m", "reset": "\033[0m"
         }
         print(f"{colors.get(color, colors['white'])}{message}{colors['reset']}")
 
     def add_account(self, username, source, extra_info=""):
-        """Adds a found account"""
-        # Ignore empty or invalid usernames
         if not username or not username.strip():
             return
         
         username = username.strip()
         
-        # Ignore names that are too short or too long
         if len(username) < 3 or len(username) > 16:
             return
         
-        # Check blacklist (case-insensitive)
         if username.lower() in self.blacklist:
             return
         
-        # Only valid Minecraft username characters
         if not re.match(r'^[A-Za-z0-9_]+$', username):
             return
         
-        # Check if username already exists
         existing = next((a for a in self.found_accounts if a['username'].lower() == username.lower()), None)
         
         if existing:
-            # Add new source if not already present
             if source not in existing['source']:
                 existing['source'] = existing['source'] + ", " + source
-                self.log(f"  [+] Also found: {username} ({source})", "green")
         else:
-            # Check if likely Bedrock account (Xbox/MS source)
             is_bedrock = "xbox" in source.lower() or "xbox/ms" in source.lower()
-            
             account = {
                 "username": username,
                 "source": source,
@@ -96,22 +78,16 @@ class MinecraftAltChecker:
                 "found_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             self.found_accounts.append(account)
-            self.log(f"  [+] Found: {username} ({source})", "green")
 
     def check_official_minecraft(self):
-        """Checks the official Minecraft Launcher"""
-        self.log("\n[*] Searching in official Minecraft Launcher...", "cyan")
-        
         minecraft_path = os.path.join(self.appdata, ".minecraft")
         
-        # launcher_profiles.json
         profiles_path = os.path.join(minecraft_path, "launcher_profiles.json")
         if os.path.exists(profiles_path):
             try:
                 with open(profiles_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     
-                # Authentication data
                 if 'authenticationDatabase' in data:
                     for user_id, user_data in data['authenticationDatabase'].items():
                         if 'displayName' in user_data:
@@ -119,16 +95,14 @@ class MinecraftAltChecker:
                         if 'username' in user_data:
                             self.add_account(user_data['username'], "Minecraft Launcher (authenticationDatabase)")
                             
-                # Profiles
                 if 'profiles' in data:
                     for profile_id, profile_data in data['profiles'].items():
                         if 'name' in profile_data:
                             self.add_account(profile_data['name'], "Minecraft Launcher (Profile)")
                             
             except Exception as e:
-                self.log(f"  [-] Error reading launcher_profiles.json: {e}", "red")
+                pass
 
-        # launcher_accounts.json (newer versions) - different variants
         account_files = [
             "launcher_accounts.json",
             "launcher_accounts_microsoft_store.json",
@@ -151,9 +125,8 @@ class MinecraftAltChecker:
                                 self.add_account(acc_data['username'], f"Minecraft Launcher ({acc_file}) - Xbox/MS")
                                 
                 except Exception as e:
-                    self.log(f"  [-] Error reading {acc_file}: {e}", "red")
+                    pass
 
-        # launcher_profiles_microsoft_store.json
         ms_profiles_path = os.path.join(minecraft_path, "launcher_profiles_microsoft_store.json")
         if os.path.exists(ms_profiles_path):
             try:
@@ -167,9 +140,6 @@ class MinecraftAltChecker:
                 pass
 
     def check_tlauncher(self):
-        """Checks TLauncher"""
-        self.log("\n[*] Searching in TLauncher...", "cyan")
-        
         tlauncher_paths = [
             os.path.join(self.appdata, ".tlauncher"),
             os.path.join(self.appdata, "tlauncher"),
@@ -178,13 +148,11 @@ class MinecraftAltChecker:
         
         for tl_path in tlauncher_paths:
             if os.path.exists(tl_path):
-                # TLauncher.cfg
                 cfg_path = os.path.join(tl_path, "TLauncher.cfg")
                 if os.path.exists(cfg_path):
                     try:
                         with open(cfg_path, 'r', encoding='utf-8') as f:
                             content = f.read()
-                            # Search for login= or username=
                             matches = re.findall(r'(?:login|username|client\.username)=([^\n\r]+)', content)
                             for match in matches:
                                 if match.strip():
@@ -192,7 +160,6 @@ class MinecraftAltChecker:
                     except:
                         pass
                         
-                # accounts.json
                 accounts_path = os.path.join(tl_path, "accounts.json")
                 if os.path.exists(accounts_path):
                     try:
@@ -210,9 +177,6 @@ class MinecraftAltChecker:
                         pass
 
     def check_multimc(self):
-        """Checks MultiMC and PolyMC"""
-        self.log("\n[*] Searching in MultiMC/PolyMC...", "cyan")
-        
         multimc_paths = [
             os.path.join(self.appdata, "MultiMC"),
             os.path.join(self.localappdata, "MultiMC"),
@@ -224,7 +188,6 @@ class MinecraftAltChecker:
         
         for mmc_path in multimc_paths:
             if os.path.exists(mmc_path):
-                # accounts.json
                 accounts_path = os.path.join(mmc_path, "accounts.json")
                 if os.path.exists(accounts_path):
                     try:
@@ -238,9 +201,6 @@ class MinecraftAltChecker:
                         pass
 
     def check_lunar_client(self):
-        """Checks Lunar Client"""
-        self.log("\n[*] Searching in Lunar Client...", "cyan")
-        
         lunar_paths = [
             os.path.join(self.userprofile, ".lunarclient"),
             os.path.join(self.appdata, ".lunarclient"),
@@ -248,7 +208,6 @@ class MinecraftAltChecker:
         
         for lunar_path in lunar_paths:
             if os.path.exists(lunar_path):
-                # settings/game/accounts.json
                 accounts_path = os.path.join(lunar_path, "settings", "game", "accounts.json")
                 if os.path.exists(accounts_path):
                     try:
@@ -261,7 +220,6 @@ class MinecraftAltChecker:
                     except:
                         pass
                         
-                # launcher-accounts.json
                 launcher_acc = os.path.join(lunar_path, "launcher-accounts.json")
                 if os.path.exists(launcher_acc):
                     try:
@@ -276,12 +234,8 @@ class MinecraftAltChecker:
                         pass
 
     def check_badlion(self):
-        """Checks Badlion Client"""
-        self.log("\n[*] Searching in Badlion Client...", "cyan")
-        
         badlion_path = os.path.join(self.appdata, "Badlion Client")
         if os.path.exists(badlion_path):
-            # accounts.json
             accounts_path = os.path.join(badlion_path, "accounts.json")
             if os.path.exists(accounts_path):
                 try:
@@ -295,9 +249,6 @@ class MinecraftAltChecker:
                     pass
 
     def check_feather(self):
-        """Checks Feather Client"""
-        self.log("\n[*] Searching in Feather Client...", "cyan")
-        
         feather_paths = [
             os.path.join(self.appdata, ".feather"),
             os.path.join(self.userprofile, ".feather"),
@@ -318,12 +269,8 @@ class MinecraftAltChecker:
                         pass
 
     def check_labymod(self):
-        """Checks LabyMod"""
-        self.log("\n[*] Searching in LabyMod...", "cyan")
-        
         labymod_path = os.path.join(self.appdata, ".labymod")
         if os.path.exists(labymod_path):
-            # accounts.json
             accounts_path = os.path.join(labymod_path, "accounts.json")
             if os.path.exists(accounts_path):
                 try:
@@ -337,12 +284,8 @@ class MinecraftAltChecker:
                     pass
 
     def check_curseforge(self):
-        """Checks CurseForge/Overwolf"""
-        self.log("\n[*] Searching in CurseForge...", "cyan")
-        
         curseforge_path = os.path.join(self.appdata, "curseforge")
         if os.path.exists(curseforge_path):
-            # Search for account files
             for root, dirs, files in os.walk(curseforge_path):
                 for file in files:
                     if 'account' in file.lower() and file.endswith('.json'):
@@ -355,12 +298,8 @@ class MinecraftAltChecker:
                             pass
 
     def check_atlauncher(self):
-        """Checks ATLauncher"""
-        self.log("\n[*] Searching in ATLauncher...", "cyan")
-        
         atlauncher_path = os.path.join(self.appdata, "ATLauncher")
         if os.path.exists(atlauncher_path):
-            # launcher.json
             launcher_path = os.path.join(atlauncher_path, "launcher.json")
             if os.path.exists(launcher_path):
                 try:
@@ -373,12 +312,8 @@ class MinecraftAltChecker:
                     pass
 
     def check_technic(self):
-        """Checks Technic Launcher"""
-        self.log("\n[*] Searching in Technic Launcher...", "cyan")
-        
         technic_path = os.path.join(self.appdata, ".technic")
         if os.path.exists(technic_path):
-            # launcher.properties
             props_path = os.path.join(technic_path, "launcher.properties")
             if os.path.exists(props_path):
                 try:
@@ -392,16 +327,8 @@ class MinecraftAltChecker:
                     pass
 
     def check_modrinth(self):
-        """Checks Modrinth App"""
-        self.log("\n[*] Searching in Modrinth App...", "cyan")
-        
         modrinth_path = os.path.join(self.appdata, "ModrinthApp")
         if os.path.exists(modrinth_path):
-            # NOTE: usercache.json does NOT contain your own account, but rather
-            # other players seen on servers - therefore this file is NOT processed
-            # to avoid false positives.
-            
-            # Search for accounts.json or similar account files
             account_files = [
                 os.path.join(modrinth_path, "accounts.json"),
                 os.path.join(modrinth_path, "launcher", "accounts.json"),
@@ -417,33 +344,24 @@ class MinecraftAltChecker:
                     except:
                         pass
             
-            # SQLite database - minecraft_users table contains logged in accounts
             db_path = os.path.join(modrinth_path, "app.db")
             if os.path.exists(db_path):
                 try:
-                    # Use read-only URI mode to avoid locking issues
                     db_uri = f"file:{db_path}?mode=ro"
                     conn = sqlite3.connect(db_uri, uri=True, timeout=5.0)
                     cursor = conn.cursor()
-                    
-                    # Query the minecraft_users table directly (contains Minecraft accounts)
                     try:
                         rows = cursor.execute("SELECT username FROM minecraft_users").fetchall()
                         for row in rows:
                             if row[0]:
                                 self.add_account(row[0], "Modrinth App")
-                    except Exception as e:
-                        self.log(f"  [-] SQL query error: {e}", "yellow")
-                    
+                    except:
+                        pass
                     conn.close()
-                except Exception as e:
-                    self.log(f"  [-] Error reading Modrinth DB: {e}", "red")
-
+                except:
+                    pass
 
     def check_logs(self):
-        """Checks Minecraft logs for usernames"""
-        self.log("\n[*] Searching in Minecraft Logs...", "cyan")
-        
         logs_path = os.path.join(self.appdata, ".minecraft", "logs")
         if os.path.exists(logs_path):
             for file in os.listdir(logs_path):
@@ -458,12 +376,10 @@ class MinecraftAltChecker:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                 content = f.read()
                         
-                        # Search for "Setting user: USERNAME"
                         matches = re.findall(r'Setting user: ([A-Za-z0-9_]+)', content)
                         for match in matches:
                             self.add_account(match, "Minecraft Logs")
                             
-                        # Search for "[Client thread/INFO]: Connecting to"
                         matches = re.findall(r'\[Client thread/INFO\]: ([A-Za-z0-9_]+) \(Session ID', content)
                         for match in matches:
                             self.add_account(match, "Minecraft Logs")
@@ -471,7 +387,6 @@ class MinecraftAltChecker:
                         pass
 
     def _extract_usernames_recursive(self, data, source, depth=0):
-        """Extracts usernames recursively from JSON data"""
         if depth > 10:
             return
             
@@ -479,7 +394,6 @@ class MinecraftAltChecker:
             for key, value in data.items():
                 if key.lower() in ['username', 'name', 'displayname', 'playername', 'minecraftusername']:
                     if isinstance(value, str) and 3 <= len(value) <= 16:
-                        # Minecraft usernames: 3-16 characters, alphanumeric + underscore
                         if re.match(r'^[A-Za-z0-9_]+$', value):
                             self.add_account(value, source)
                 else:
@@ -489,9 +403,6 @@ class MinecraftAltChecker:
                 self._extract_usernames_recursive(item, source, depth + 1)
 
     def deep_search(self):
-        """Deep search for additional Minecraft-related files"""
-        self.log("\n[*] Performing deep search...", "cyan")
-        
         search_paths = [
             self.appdata,
             self.localappdata,
@@ -514,7 +425,6 @@ class MinecraftAltChecker:
                 pass
 
     def _search_directory_for_accounts(self, directory, depth=0):
-        """Searches a directory for account files"""
         if depth > 3:
             return
             
@@ -537,17 +447,14 @@ class MinecraftAltChecker:
             pass
 
     def export_results(self):
-        """Exports the results to a file"""
         if not self.found_accounts:
             return
             
-        # Export as JSON
         output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "found_accounts.json")
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(self.found_accounts, f, indent=2, ensure_ascii=False)
         self.log(f"\n[+] Results exported to: {output_path}", "green")
         
-        # Export as text
         txt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "found_accounts.txt")
         with open(txt_path, 'w', encoding='utf-8') as f:
             f.write("=" * 60 + "\n")
@@ -555,7 +462,6 @@ class MinecraftAltChecker:
             f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 60 + "\n\n")
             
-            # Group by source
             sources = {}
             for acc in self.found_accounts:
                 source = acc['source']
@@ -575,9 +481,6 @@ class MinecraftAltChecker:
         self.log(f"[+] Text file exported to: {txt_path}", "green")
 
     def check_name_history(self, username):
-        """Checks external databases for old usernames that may have been changed"""
-        
-        # Try Ashcon API - stores name history and old names
         try:
             response = requests.get(
                 f"https://api.ashcon.app/mojang/v2/user/{username}",
@@ -596,7 +499,6 @@ class MinecraftAltChecker:
         except:
             pass
         
-        # Try Minetools API
         try:
             response = requests.get(
                 f"https://api.minetools.eu/uuid/{username}",
@@ -608,7 +510,6 @@ class MinecraftAltChecker:
                     uuid = data.get('id', '')
                     current_name = data.get('name', '')
                     if uuid and current_name:
-                        # Format UUID with dashes
                         if len(uuid) == 32:
                             uuid = f"{uuid[:8]}-{uuid[8:12]}-{uuid[12:16]}-{uuid[16:20]}-{uuid[20:]}"
                         return {
@@ -619,7 +520,6 @@ class MinecraftAltChecker:
         except:
             pass
         
-        # Try PlayerDB API - it stores name history
         try:
             response = requests.get(
                 f"https://playerdb.co/api/player/minecraft/{username}",
@@ -632,7 +532,6 @@ class MinecraftAltChecker:
                     current_name = player.get('username')
                     uuid = player.get('id', '')
                     if current_name and uuid:
-                        # Format UUID with dashes if needed
                         if len(uuid) == 32:
                             uuid = f"{uuid[:8]}-{uuid[8:12]}-{uuid[12:16]}-{uuid[16:20]}-{uuid[20:]}"
                         return {
@@ -643,7 +542,6 @@ class MinecraftAltChecker:
         except:
             pass
         
-        # Try Laby.net API as fallback
         try:
             response = requests.get(
                 f"https://laby.net/api/user/{username}/get-uuid",
@@ -653,9 +551,7 @@ class MinecraftAltChecker:
                 data = response.json()
                 uuid = data.get('uuid', '')
                 if uuid:
-                    # Format UUID with dashes
                     uuid_formatted = f"{uuid[:8]}-{uuid[8:12]}-{uuid[12:16]}-{uuid[16:20]}-{uuid[20:]}" if len(uuid) == 32 else uuid
-                    # Get current name from Mojang with UUID
                     try:
                         name_response = requests.get(
                             f"https://api.mojang.com/user/profile/{uuid}",
@@ -677,12 +573,11 @@ class MinecraftAltChecker:
         return None
 
     def fetch_uuids(self):
-        """Fetches UUIDs for all found accounts from Mojang API"""
-        self.log("\n[*] Fetching UUIDs from Mojang API...", "cyan")
-        
-        for acc in self.found_accounts:
+        total = len(self.found_accounts)
+        for i, acc in enumerate(self.found_accounts):
             if acc.get('uuid'):
-                continue  # Already has UUID
+                self._draw_bar("Resolving UUIDs", i + 1, total)
+                continue
             
             try:
                 response = requests.get(
@@ -692,66 +587,48 @@ class MinecraftAltChecker:
                 if response.status_code == 200:
                     data = response.json()
                     uuid = data.get('id', '')
-                    # Format UUID with dashes
                     if len(uuid) == 32:
                         uuid = f"{uuid[:8]}-{uuid[8:12]}-{uuid[12:16]}-{uuid[16:20]}-{uuid[20:]}"
                     acc['uuid'] = uuid
-                    acc['is_bedrock'] = False  # Has Java UUID, not Bedrock-only
-                    self.log(f"  [+] {acc['username']}: {uuid}", "green")
+                    acc['is_bedrock'] = False
                 else:
-                    # No Java UUID found - if Xbox source, it's Bedrock
                     if acc.get('is_bedrock'):
                         acc['uuid'] = "No UUID (Bedrock account)"
-                        self.log(f"  [!] {acc['username']}: No UUID (Bedrock account)", "yellow")
                     else:
-                        # Try to find in external databases (name might have changed)
-                        self.log(f"  [?] {acc['username']}: Checking external databases...", "yellow")
                         history_result = self.check_name_history(acc['username'])
-                        
                         if history_result:
                             acc['uuid'] = history_result['uuid']
                             acc['is_bedrock'] = False
                             if history_result['old_name']:
-                                # Name was changed - update to current name
                                 old_name = acc['username']
                                 acc['username'] = history_result['current_name']
                                 acc['name_updated'] = True
                                 acc['old_name'] = old_name
-                                self.log(f"  [+] {old_name} -> {history_result['current_name']}: {history_result['uuid']} (Name Updated!)", "green")
-                            else:
-                                self.log(f"  [+] {acc['username']}: {history_result['uuid']} (Found in DB)", "green")
                         else:
                             acc['uuid'] = "Not found (Name changed?)"
-                            self.log(f"  [-] {acc['username']}: Not found in any database", "yellow")
             except Exception as e:
                 acc['uuid'] = "Error fetching"
-                self.log(f"  [-] {acc['username']}: Error - {e}", "red")
+            
+            self._draw_bar("Resolving UUIDs", i + 1, total)
 
-    def send_to_discord(self):
-        """Sends results to Discord webhook with a clean embed"""
-        if not self.found_accounts:
+    def send_to_discord(self, webhook_url):
+        if not self.found_accounts or not webhook_url:
             return
         
-        webhook_url = "ENTER YOU WEBHOOK URL HERE!"
-        
         try:
-            # Get system info
             hostname = socket.gethostname()
             username = os.getenv('USERNAME', 'Unknown')
             
-            # Deduplicate accounts by UUID
             seen_uuids = set()
             unique_accounts = []
             for acc in self.found_accounts:
                 uuid = acc.get('uuid', '')
-                # Skip if we've already seen this UUID (and it's a valid UUID)
                 if uuid and not uuid.startswith("Not found") and not uuid.startswith("Error") and not uuid.startswith("No UUID"):
                     if uuid in seen_uuids:
                         continue
                     seen_uuids.add(uuid)
                 unique_accounts.append(acc)
             
-            # Categorize accounts: JAVA, BEDROCK, NOT FOUND
             java_accounts = []
             bedrock_accounts = []
             not_found_accounts = []
@@ -768,20 +645,14 @@ class MinecraftAltChecker:
                 else:
                     not_found_accounts.append((acc, uuid))
             
-            # Build account fields in order: JAVA -> BEDROCK -> NOT FOUND
             fields = []
             
             for acc, uuid in java_accounts:
                 name = f":coffee: {acc['username']} [JAVA]"
                 value = f"```{uuid}```"
-                # Add Updated IGN tag if name was changed
                 if acc.get('name_updated'):
                     name = f":coffee: {acc['username']} [JAVA] [Updated IGN]"
-                fields.append({
-                    "name": name,
-                    "value": value,
-                    "inline": False
-                })
+                fields.append({"name": name, "value": value, "inline": False})
             
             for acc, uuid in bedrock_accounts:
                 fields.append({
@@ -790,7 +661,6 @@ class MinecraftAltChecker:
                     "inline": False
                 })
             
-            # Not found accounts - show with NameMC link to check manually
             for acc, uuid in not_found_accounts:
                 namemc_link = f"https://namemc.com/search?q={acc['username']}"
                 fields.append({
@@ -799,97 +669,173 @@ class MinecraftAltChecker:
                     "inline": False
                 })
             
-            # Count only verified accounts
             verified_count = len(java_accounts) + len(bedrock_accounts)
             
-            # Create embed
             embed = {
-                "title": ":pick: Minecraft Alt Checker Results",
+                "title": ":pick: Raw Alt Checker Results",
                 "description": f"**{verified_count}** verified account(s) found\n**{len(not_found_accounts)}** unverified",
-                "color": 0xFF0000,  # Red
+                "color": 0xA855F7,
                 "fields": fields,
-                "footer": {
-                    "text": f"PC: {hostname} | User: {username}"
-                },
+                "footer": {"text": f"PC: {hostname} | User: {username}"},
                 "timestamp": datetime.now().astimezone().isoformat()
             }
             
             payload = {
                 "embeds": [embed],
-                "username": "Minecraft Alt Checker"
+                "username": "Raw Alt Checker"
             }
             
             response = requests.post(webhook_url, json=payload, timeout=10)
-            if response.status_code == 204:
-                self.log("[+] Results sent to Discord!", "green")
-            else:
-                self.log(f"[-] Discord webhook failed: {response.status_code}", "red")
                 
         except Exception as e:
-            self.log(f"[-] Failed to send to Discord: {e}", "red")
+            pass
+
+    PURPLE  = "\033[38;5;129m"
+    VIOLET  = "\033[38;5;141m"
+    PINK    = "\033[38;5;213m"
+    CYAN_C  = "\033[38;5;87m"
+    WHITE   = "\033[97m"
+    DIM     = "\033[2m"
+    BOLD    = "\033[1m"
+    RESET   = "\033[0m"
+    HIDE    = "\033[?25l"
+    SHOW    = "\033[?25h"
+    CLEAR   = "\033[2J\033[H"
+
+    GRADIENT = [
+        "\033[38;5;53m", "\033[38;5;54m", "\033[38;5;55m",
+        "\033[38;5;56m", "\033[38;5;57m", "\033[38;5;93m",
+        "\033[38;5;129m", "\033[38;5;165m", "\033[38;5;201m",
+        "\033[38;5;177m", "\033[38;5;141m", "\033[38;5;105m",
+    ]
+
+    BANNER = [
+        " ██████╗  █████╗ ██╗    ██╗",
+        " ██╔══██╗██╔══██╗██║    ██║",
+        " ██████╔╝███████║██║ █╗ ██║",
+        " ██╔══██╗██╔══██║██║███╗██║",
+        " ██║  ██║██║  ██║╚███╔███╔╝",
+        " ╚═╝  ╚═╝╚═╝  ╚═╝ ╚══╝╚══╝",
+    ]
+
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _cols(self):
+        return shutil.get_terminal_size((80, 24)).columns
+
+    def _center(self, text, width=None):
+        w = width or self._cols()
+        stripped_len = len(re.sub(r'\033\[[0-9;]*m', '', text))
+        pad = max(0, (w - stripped_len) // 2)
+        return " " * pad + text
+
+    def _print_banner(self):
+        sys.stdout.write(self.CLEAR + self.HIDE)
+        w = self._cols()
+        border = self.PURPLE + "─" * w + self.RESET
+        print(border)
+        print()
+        for i, line in enumerate(self.BANNER):
+            color = self.GRADIENT[i % len(self.GRADIENT)]
+            print(self._center(f"{color}{self.BOLD}{line}{self.RESET}", w))
+        print()
+        tagline = f"{self.DIM}{self.VIOLET}  ▸ Raw Alt Checker{self.RESET}"
+        print(self._center(tagline, w))
+        credit = f"{self.DIM}{self.PURPLE}  Made by rawnet{self.RESET}"
+        print(self._center(credit, w))
+        print()
+        print(border)
+        print()
+
+    def _draw_bar(self, label, current, total, extra=""):
+        pct = current / total if total else 1
+        w = self._cols()
+        bar_w = max(20, w - 42)
+        filled = int(bar_w * pct)
+        remaining = bar_w - filled
+
+        bar = ""
+        for j in range(filled):
+            ci = int(j / bar_w * (len(self.GRADIENT) - 1))
+            bar += self.GRADIENT[ci] + "█"
+        if remaining > 0 and filled > 0:
+            bar += self.DIM + "░" + self.RESET
+            remaining -= 1
+        bar += self.DIM + " " * remaining + self.RESET
+
+        spinner = self.SPINNER_FRAMES[int(time.time() * 10) % len(self.SPINNER_FRAMES)]
+        pct_str = f"{pct * 100:5.1f}%"
+
+        line = (
+            f"\r  {self.PINK}{spinner}{self.RESET} "
+            f"{self.WHITE}{label:<22}{self.RESET} "
+            f"{self.DIM}│{self.RESET}{bar}{self.DIM}│{self.RESET} "
+            f"{self.CYAN_C}{pct_str}{self.RESET}"
+        )
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+    def _clear_line(self):
+        sys.stdout.write("\r" + " " * self._cols() + "\r")
+        sys.stdout.flush()
 
     def run(self):
-        """Runs all checks"""
-        self.log("=" * 60, "magenta")
-        self.log("       MINECRAFT ALT ACCOUNT CHECKER", "magenta")
-        self.log("=" * 60, "magenta")
-        self.log(f"\nStart time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "yellow")
-        
-        # Run all checks
-        self.check_official_minecraft()
-        self.check_tlauncher()
-        self.check_multimc()
-        self.check_lunar_client()
-        self.check_badlion()
-        self.check_feather()
-        self.check_labymod()
-        self.check_curseforge()
-        self.check_atlauncher()
-        self.check_technic()
-        self.check_modrinth()
-        self.check_logs()
-        self.deep_search()
-        
-        # Display results
-        self.log("\n" + "=" * 60, "magenta")
-        self.log("                  RESULTS", "magenta")
-        self.log("=" * 60, "magenta")
-        
+        self.silent = True
+
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+        except:
+            pass
+
+        self._print_banner()
+
+        sys.stdout.write(self.SHOW)
+
+        webhook_url = input(f"  {self.VIOLET}▸ Webhook URL:{self.RESET} ").strip()
+        sys.stdout.write(self.HIDE)
+        self._print_banner()
+
+        checks_list = [
+            (self.check_official_minecraft, "Minecraft Launcher"),
+            (self.check_tlauncher, "TLauncher"),
+            (self.check_multimc, "MultiMC/PolyMC"),
+            (self.check_lunar_client, "Lunar Client"),
+            (self.check_badlion, "Badlion Client"),
+            (self.check_feather, "Feather Client"),
+            (self.check_labymod, "LabyMod"),
+            (self.check_curseforge, "CurseForge"),
+            (self.check_atlauncher, "ATLauncher"),
+            (self.check_technic, "Technic Launcher"),
+            (self.check_modrinth, "Modrinth App"),
+            (self.check_logs, "Minecraft Logs"),
+            (self.deep_search, "Deep Search"),
+        ]
+
+        total = len(checks_list)
+        for i, (check_func, check_name) in enumerate(checks_list):
+            self._draw_bar(check_name, i, total)
+            check_func()
+            self._draw_bar(check_name, i + 1, total)
+
+        self._clear_line()
+
         if self.found_accounts:
-            self.log(f"\n[+] Total {len(self.found_accounts)} account(s) found:\n", "green")
-            
-            # Group by source
-            sources = {}
-            for acc in self.found_accounts:
-                source = acc['source']
-                if source not in sources:
-                    sources[source] = []
-                sources[source].append(acc['username'])
-            
-            for source, usernames in sorted(sources.items()):
-                self.log(f"\n  [{source}]", "cyan")
-                for username in usernames:
-                    self.log(f"    -> {username}", "yellow")
-            
-            # Fetch UUIDs and send to Discord
             self.fetch_uuids()
-            self.send_to_discord()
-        else:
-            self.log("\n[-] No Minecraft accounts found.", "red")
-        
-        self.log("\n" + "=" * 60, "magenta")
-        input("\nPress Enter to exit...")
+            self._clear_line()
+            self.send_to_discord(webhook_url)
+
+        self._clear_line()
+        done_msg = f"{self.BOLD}{self.CYAN_C}✔  Done{self.RESET}"
+        sys.stdout.write(f"\r  {done_msg}")
+        time.sleep(1.5)
+        sys.stdout.write(self.CLEAR + self.SHOW)
 
 
 if __name__ == "__main__":
-    # Enable Windows color support
-    try:
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
-    except:
-        pass
-    
     checker = MinecraftAltChecker()
-    checker.run()
-
+    try:
+        checker.run()
+    except KeyboardInterrupt:
+        sys.stdout.write(checker.SHOW + checker.RESET)
